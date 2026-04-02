@@ -1,0 +1,163 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AudioRecordingEntry, UtteranceSegment } from '../types';
+
+interface Props {
+  audioUrl: string;
+  entries: AudioRecordingEntry[];
+  onReset: () => void;
+}
+
+function formatDuration(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}:${sec.toString().padStart(2, '0')}`;
+}
+
+function formatTime(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}:${sec.toString().padStart(2, '0')}`;
+}
+
+export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const segmentEndRef = useRef<number | null>(null);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(entries.length === 1 ? 0 : null);
+  const [activeUtterance, setActiveUtterance] = useState<number | null>(null);
+
+  // Sync play state with audio element events
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => { setIsPlaying(false); setActiveUtterance(null); }
+    const onEnded = () => { setIsPlaying(false); setActiveUtterance(null); segmentEndRef.current = null; }
+    audio.addEventListener('play', onPlay);
+    audio.addEventListener('pause', onPause);
+    audio.addEventListener('ended', onEnded);
+    return () => {
+      audio.removeEventListener('play', onPlay);
+      audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('ended', onEnded);
+    };
+  }, []);
+
+  // timeupdate listener for segment end
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onTimeUpdate = () => {
+      if (segmentEndRef.current !== null && audio.currentTime >= segmentEndRef.current) {
+        audio.pause();
+        segmentEndRef.current = null;
+        setActiveUtterance(null);
+      }
+    };
+    audio.addEventListener('timeupdate', onTimeUpdate);
+    return () => audio.removeEventListener('timeupdate', onTimeUpdate);
+  }, []);
+
+  const handlePlayPause = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    segmentEndRef.current = null;
+    if (audio.paused) {
+      audio.play();
+    } else {
+      audio.pause();
+    }
+  };
+
+  const handleSeekPlay = useCallback((utterance: UtteranceSegment) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    segmentEndRef.current = (utterance.fileStartMs + utterance.fileDurationMs) / 1000;
+    audio.currentTime = utterance.fileStartMs / 1000;
+    setActiveUtterance(utterance.index);
+    audio.play();
+  }, []);
+
+  return (
+    <div className="player-wrapper">
+      {/* Hidden audio element */}
+      <audio ref={audioRef} src={audioUrl} preload="auto" />
+
+      <div className="player-toolbar">
+        <button className="reset-btn" onClick={onReset}>← Load Another</button>
+        <span className="entry-count">{entries.length} recording{entries.length !== 1 ? 's' : ''}</span>
+      </div>
+
+      {entries.map((entry, entryIdx) => {
+        const isExpanded = expandedIndex === entryIdx;
+        const date = new Date(entry.startedAt);
+        const dateStr = date.toLocaleDateString();
+        const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        return (
+          <div key={entry.uri + entryIdx} className="recording-card">
+            {/* Card header */}
+            <div className="card-header">
+              <div className="card-meta">
+                <div className="card-title">{dateStr} · {timeStr}</div>
+                <div className="card-subtitle">
+                  {formatDuration(entry.durationMs)}
+                  <span className="badge">{entry.platform}</span>
+                  {!entry.hasAudio && <span className="badge badge--warn">may be silent</span>}
+                  <span className="badge badge--muted">{entry.utterances.length} utterance{entry.utterances.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="card-booking">Booking: {entry.bookingId}</div>
+              </div>
+              <div className="card-actions">
+                <button className="action-btn" onClick={handlePlayPause}>
+                  {isPlaying ? '⏸ Pause' : '▶ Play All'}
+                </button>
+                {entry.utterances.length > 0 && (
+                  <button
+                    className="action-btn action-btn--secondary"
+                    onClick={() => setExpandedIndex(isExpanded ? null : entryIdx)}
+                  >
+                    {isExpanded ? 'Hide Utterances' : `Show Utterances (${entry.utterances.length})`}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Utterance list */}
+            {isExpanded && (
+              <div className="utterance-list">
+                {entry.utterances.map((u) => (
+                  <div
+                    key={u.index}
+                    className={`utterance-row ${activeUtterance === u.index ? 'utterance-row--active' : ''}`}
+                  >
+                    <div className="utterance-index">{u.index + 1}</div>
+                    <div className="utterance-body">
+                      <div className="utterance-time">
+                        {formatTime(u.fileStartMs)} → {formatTime(u.fileStartMs + u.fileDurationMs)}
+                        <span className="utterance-duration">({formatDuration(u.fileDurationMs)})</span>
+                      </div>
+                      <div className="utterance-transcript">
+                        {u.transcript ?? <span className="utterance-no-transcript">no transcript</span>}
+                      </div>
+                    </div>
+                    <button
+                      className="seek-btn"
+                      onClick={() => handleSeekPlay(u)}
+                      title="Play this utterance"
+                    >
+                      {activeUtterance === u.index && isPlaying ? '⏸' : '▶'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
