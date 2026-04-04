@@ -24,10 +24,20 @@ function formatTime(ms: number): string {
 export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const segmentEndRef = useRef<number | null>(null);
+  const segmentTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(entries.length === 1 ? 0 : null);
-  const [activeUtterance, setActiveUtterance] = useState<number | null>(null);
+  // activeUtterance tracks { entryIdx, utteranceIndex } to uniquely identify which row is active
+  const [activeUtterance, setActiveUtterance] = useState<{ entryIdx: number; utteranceIndex: number } | null>(null);
+
+  const clearSegment = () => {
+    segmentEndRef.current = null;
+    if (segmentTimeoutRef.current !== null) {
+      clearTimeout(segmentTimeoutRef.current);
+      segmentTimeoutRef.current = null;
+    }
+  };
 
   // Sync play state with audio element events
   useEffect(() => {
@@ -35,7 +45,7 @@ export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
     if (!audio) return;
     const onPlay = () => setIsPlaying(true);
     const onPause = () => { setIsPlaying(false); setActiveUtterance(null); }
-    const onEnded = () => { setIsPlaying(false); setActiveUtterance(null); segmentEndRef.current = null; }
+    const onEnded = () => { setIsPlaying(false); setActiveUtterance(null); clearSegment(); }
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
     audio.addEventListener('ended', onEnded);
@@ -46,25 +56,29 @@ export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
     };
   }, []);
 
-  // timeupdate listener for segment end
+  // timeupdate listener as secondary safety net for segment end
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     const onTimeUpdate = () => {
       if (segmentEndRef.current !== null && audio.currentTime >= segmentEndRef.current) {
         audio.pause();
-        segmentEndRef.current = null;
+        clearSegment();
         setActiveUtterance(null);
       }
     };
     audio.addEventListener('timeupdate', onTimeUpdate);
-    return () => audio.removeEventListener('timeupdate', onTimeUpdate);
+    return () => {
+      audio.removeEventListener('timeupdate', onTimeUpdate);
+      clearSegment();
+    };
   }, []);
 
   const handlePlayPause = () => {
     const audio = audioRef.current;
     if (!audio) return;
-    segmentEndRef.current = null;
+    clearSegment();
+    setActiveUtterance(null);
     if (audio.paused) {
       audio.play();
     } else {
@@ -72,13 +86,24 @@ export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
     }
   };
 
-  const handleSeekPlay = useCallback((utterance: UtteranceSegment) => {
+  const handleSeekPlay = useCallback((entryIdx: number, utterance: UtteranceSegment) => {
     const audio = audioRef.current;
     if (!audio) return;
-    segmentEndRef.current = (utterance.fileStartMs + utterance.fileDurationMs) / 1000;
+
+    clearSegment();
     audio.currentTime = utterance.fileStartMs / 1000;
-    setActiveUtterance(utterance.index);
+    setActiveUtterance({ entryIdx, utteranceIndex: utterance.index });
     audio.play();
+
+    // Hard-stop at exactly fileDurationMs from now — more reliable than timeupdate polling
+    segmentTimeoutRef.current = setTimeout(() => {
+      audio.pause();
+      clearSegment();
+      setActiveUtterance(null);
+    }, utterance.fileDurationMs);
+
+    // Keep segmentEndRef for the timeupdate secondary safety net
+    segmentEndRef.current = (utterance.fileStartMs + utterance.fileDurationMs) / 1000;
   }, []);
 
   return (
@@ -129,30 +154,33 @@ export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
             {/* Utterance list */}
             {isExpanded && (
               <div className="utterance-list">
-                {entry.utterances.map((u) => (
-                  <div
-                    key={u.index}
-                    className={`utterance-row ${activeUtterance === u.index ? 'utterance-row--active' : ''}`}
-                  >
-                    <div className="utterance-index">{u.index + 1}</div>
-                    <div className="utterance-body">
-                      <div className="utterance-time">
-                        {formatTime(u.fileStartMs)} → {formatTime(u.fileStartMs + u.fileDurationMs)}
-                        <span className="utterance-duration">({formatDuration(u.fileDurationMs)})</span>
-                      </div>
-                      <div className="utterance-transcript">
-                        {u.transcript ?? <span className="utterance-no-transcript">no transcript</span>}
-                      </div>
-                    </div>
-                    <button
-                      className="seek-btn"
-                      onClick={() => handleSeekPlay(u)}
-                      title="Play this utterance"
+                {entry.utterances.map((u) => {
+                  const isActive = activeUtterance?.entryIdx === entryIdx && activeUtterance?.utteranceIndex === u.index;
+                  return (
+                    <div
+                      key={u.index}
+                      className={`utterance-row ${isActive ? 'utterance-row--active' : ''}`}
                     >
-                      {activeUtterance === u.index && isPlaying ? '⏸' : '▶'}
-                    </button>
-                  </div>
-                ))}
+                      <div className="utterance-index">{u.index + 1}</div>
+                      <div className="utterance-body">
+                        <div className="utterance-time">
+                          {formatTime(u.fileStartMs)} → {formatTime(u.fileStartMs + u.fileDurationMs)}
+                          <span className="utterance-duration">({formatDuration(u.fileDurationMs)})</span>
+                        </div>
+                        <div className="utterance-transcript">
+                          {u.transcript ?? <span className="utterance-no-transcript">no transcript</span>}
+                        </div>
+                      </div>
+                      <button
+                        className="seek-btn"
+                        onClick={() => handleSeekPlay(entryIdx, u)}
+                        title="Play this utterance"
+                      >
+                        {isActive && isPlaying ? '⏸' : '▶'}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
