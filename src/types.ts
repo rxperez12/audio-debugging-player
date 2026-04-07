@@ -1,5 +1,11 @@
 export interface UtteranceSegment {
   index: number;
+  /** Realtime conversation item id for this user audio turn */
+  itemId?: string | null;
+  /** ISO timestamp for when this utterance started in wall-clock time */
+  wallStartAt?: string | null;
+  /** ISO timestamp for when this utterance ended in wall-clock time */
+  wallEndAt?: string | null;
   /** Offset (ms) into the .m4a file where this utterance begins */
   fileStartMs: number;
   /** Duration (ms) of this utterance in the file */

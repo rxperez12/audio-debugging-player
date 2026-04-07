@@ -21,6 +21,17 @@ function formatTime(ms: number): string {
   return `${min}:${sec.toString().padStart(2, '0')}`;
 }
 
+function formatWallTime(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const segmentEndRef = useRef<number | null>(null);
@@ -156,6 +167,9 @@ export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
               <div className="utterance-list">
                 {entry.utterances.map((u) => {
                   const isActive = activeUtterance?.entryIdx === entryIdx && activeUtterance?.utteranceIndex === u.index;
+                  const wallStart = formatWallTime(u.wallStartAt);
+                  const wallEnd = formatWallTime(u.wallEndAt);
+                  const hasWallTime = !!(wallStart || wallEnd);
                   return (
                     <div
                       key={u.index}
@@ -163,9 +177,22 @@ export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
                     >
                       <div className="utterance-index">{u.index + 1}</div>
                       <div className="utterance-body">
-                        <div className="utterance-time">
-                          {formatTime(u.fileStartMs)} → {formatTime(u.fileStartMs + u.fileDurationMs)}
-                          <span className="utterance-duration">({formatDuration(u.fileDurationMs)})</span>
+                        <div className="utterance-time-group">
+                          {hasWallTime && (
+                            <div className="utterance-time utterance-time--wall">
+                              <span className="utterance-time-label">Wall</span>
+                              <span className="utterance-time-value">
+                                {wallStart ?? 'unknown'}{wallEnd ? ` → ${wallEnd}` : ''}
+                              </span>
+                            </div>
+                          )}
+                          <div className="utterance-time utterance-time--file">
+                            <span className="utterance-time-label">File</span>
+                            <span className="utterance-time-value">
+                              {formatTime(u.fileStartMs)} → {formatTime(u.fileStartMs + u.fileDurationMs)}
+                            </span>
+                            <span className="utterance-duration">{formatDuration(u.fileDurationMs)}</span>
+                          </div>
                         </div>
                         <div className="utterance-transcript">
                           {u.transcript ?? <span className="utterance-no-transcript">no transcript</span>}
