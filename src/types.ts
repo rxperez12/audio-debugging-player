@@ -18,7 +18,10 @@ export interface AudioRecordingEntry {
   uri: string;
   bookingId: string;
   startedAt: string; // ISO timestamp
+  /** Total playable audio captured in the saved file */
   durationMs: number;
+  /** Full wall-clock session lifetime, including silence between utterances */
+  sessionElapsedMs?: number;
   platform: string;
   /** false on Android — concurrent mic access may yield silent recording */
   hasAudio: boolean;

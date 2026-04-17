@@ -141,6 +141,9 @@ export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
                 <div className="card-title">{dateStr} · {timeStr}</div>
                 <div className="card-subtitle">
                   {formatDuration(entry.durationMs)}
+                  {entry.sessionElapsedMs !== undefined && (
+                    <span className="badge badge--muted">session {formatDuration(entry.sessionElapsedMs)}</span>
+                  )}
                   <span className="badge">{entry.platform}</span>
                   {!entry.hasAudio && <span className="badge badge--warn">may be silent</span>}
                   <span className="badge badge--muted">{entry.utterances.length} utterance{entry.utterances.length !== 1 ? 's' : ''}</span>
