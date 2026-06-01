@@ -1,221 +1,164 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AudioRecordingEntry, UtteranceSegment } from '../types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CombinedSession, TimelineRow } from '../types';
+import { SessionPlayer } from '../audio/SessionPlayer';
 
 interface Props {
-  audioUrl: string;
-  entries: AudioRecordingEntry[];
+  session: CombinedSession;
   onReset: () => void;
 }
 
 function formatDuration(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
   const min = Math.floor(totalSec / 60);
   const sec = totalSec % 60;
   return `${min}:${sec.toString().padStart(2, '0')}`;
 }
 
-function formatTime(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return `${min}:${sec.toString().padStart(2, '0')}`;
+function formatOffset(ms: number): string {
+  const sign = ms < 0 ? '-' : '';
+  return `${sign}${formatDuration(Math.abs(ms))}`;
 }
 
 function formatWallTime(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-export default function RecordingPlayer({ audioUrl, entries, onReset }: Props) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const segmentEndRef = useRef<number | null>(null);
-  const segmentTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+export default function RecordingPlayer({ session, onReset }: Props) {
+  const player = useMemo(() => new SessionPlayer(session), [session]);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(entries.length === 1 ? 0 : null);
-  // activeUtterance tracks { entryIdx, utteranceIndex } to uniquely identify which row is active
-  const [activeUtterance, setActiveUtterance] = useState<{ entryIdx: number; utteranceIndex: number } | null>(null);
+  const [activeRowKey, setActiveRowKey] = useState<string | null>(null);
+  const playerRef = useRef(player);
+  playerRef.current = player;
 
-  const clearSegment = () => {
-    segmentEndRef.current = null;
-    if (segmentTimeoutRef.current !== null) {
-      clearTimeout(segmentTimeoutRef.current);
-      segmentTimeoutRef.current = null;
-    }
+  useEffect(() => {
+    player.setOnEnded(() => {
+      setIsPlaying(false);
+      setActiveRowKey(null);
+    });
+    return () => {
+      player.setOnEnded(null);
+      player.stop();
+    };
+  }, [player]);
+
+  const rowKey = (row: TimelineRow) => `${row.speaker}-${row.entryIdx}-${row.utteranceIndex}`;
+
+  const handlePlayAll = () => {
+    setActiveRowKey(null);
+    setIsPlaying(true);
+    void player.schedulePlayAll();
   };
 
-  // Sync play state with audio element events
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => { setIsPlaying(false); setActiveUtterance(null); }
-    const onEnded = () => { setIsPlaying(false); setActiveUtterance(null); clearSegment(); }
-    audio.addEventListener('play', onPlay);
-    audio.addEventListener('pause', onPause);
-    audio.addEventListener('ended', onEnded);
-    return () => {
-      audio.removeEventListener('play', onPlay);
-      audio.removeEventListener('pause', onPause);
-      audio.removeEventListener('ended', onEnded);
-    };
-  }, []);
-
-  // timeupdate listener as secondary safety net for segment end
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const onTimeUpdate = () => {
-      if (segmentEndRef.current !== null && audio.currentTime >= segmentEndRef.current) {
-        audio.pause();
-        clearSegment();
-        setActiveUtterance(null);
-      }
-    };
-    audio.addEventListener('timeupdate', onTimeUpdate);
-    return () => {
-      audio.removeEventListener('timeupdate', onTimeUpdate);
-      clearSegment();
-    };
-  }, []);
-
-  const handlePlayPause = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    clearSegment();
-    setActiveUtterance(null);
-    if (audio.paused) {
-      audio.play();
-    } else {
-      audio.pause();
-    }
+  const handleStop = () => {
+    player.stop();
+    setIsPlaying(false);
+    setActiveRowKey(null);
   };
 
-  const handleSeekPlay = useCallback((entryIdx: number, utterance: UtteranceSegment) => {
-    const audio = audioRef.current;
-    if (!audio) return;
+  const handlePlayRow = (row: TimelineRow) => {
+    if (row.noAudio) return;
+    const key = rowKey(row);
+    if (activeRowKey === key && isPlaying) {
+      handleStop();
+      return;
+    }
+    setActiveRowKey(key);
+    setIsPlaying(true);
+    void player.playRow(row);
+  };
 
-    clearSegment();
-    audio.currentTime = utterance.fileStartMs / 1000;
-    setActiveUtterance({ entryIdx, utteranceIndex: utterance.index });
-    audio.play();
+  const userEntry = session.user.entries[0];
+  const aiEntry = session.ai?.entries[0];
+  const startDate = new Date(session.t0Ms);
+  const dateStr = startDate.toLocaleDateString();
+  const timeStr = startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    // Hard-stop at exactly fileDurationMs from now — more reliable than timeupdate polling
-    segmentTimeoutRef.current = setTimeout(() => {
-      audio.pause();
-      clearSegment();
-      setActiveUtterance(null);
-    }, utterance.fileDurationMs);
-
-    // Keep segmentEndRef for the timeupdate secondary safety net
-    segmentEndRef.current = (utterance.fileStartMs + utterance.fileDurationMs) / 1000;
-  }, []);
+  const aiHasUtterances = (session.ai?.entries ?? []).some(
+    (e) => (e.utterances?.length ?? 0) > 0,
+  );
 
   return (
     <div className="player-wrapper">
-      {/* Hidden audio element */}
-      <audio ref={audioRef} src={audioUrl} preload="auto" />
-
       <div className="player-toolbar">
         <button className="reset-btn" onClick={onReset}>← Load Another</button>
-        <span className="entry-count">{entries.length} recording{entries.length !== 1 ? 's' : ''}</span>
+        <span className="entry-count">
+          {session.rows.length} utterance{session.rows.length !== 1 ? 's' : ''}
+          {session.ai ? ' · user + AI' : ' · user only'}
+        </span>
       </div>
 
-      {entries.map((entry, entryIdx) => {
-        const isExpanded = expandedIndex === entryIdx;
-        const date = new Date(entry.startedAt);
-        const dateStr = date.toLocaleDateString();
-        const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-        return (
-          <div key={entry.uri + entryIdx} className="recording-card">
-            {/* Card header */}
-            <div className="card-header">
-              <div className="card-meta">
-                <div className="card-title">{dateStr} · {timeStr}</div>
-                <div className="card-subtitle">
-                  {formatDuration(entry.durationMs)}
-                  {entry.sessionElapsedMs !== undefined && (
-                    <span className="badge badge--muted">session {formatDuration(entry.sessionElapsedMs)}</span>
-                  )}
-                  <span className="badge">{entry.platform}</span>
-                  {!entry.hasAudio && <span className="badge badge--warn">may be silent</span>}
-                  <span className="badge badge--muted">{entry.utterances.length} utterance{entry.utterances.length !== 1 ? 's' : ''}</span>
-                </div>
-                <div className="card-booking">Booking: {entry.bookingId}</div>
-              </div>
-              <div className="card-actions">
-                <button className="action-btn" onClick={handlePlayPause}>
-                  {isPlaying ? '⏸ Pause' : '▶ Play All'}
-                </button>
-                {entry.utterances.length > 0 && (
-                  <button
-                    className="action-btn action-btn--secondary"
-                    onClick={() => setExpandedIndex(isExpanded ? null : entryIdx)}
-                  >
-                    {isExpanded ? 'Hide Utterances' : `Show Utterances (${entry.utterances.length})`}
-                  </button>
-                )}
-              </div>
+      <div className="recording-card">
+        <div className="card-header">
+          <div className="card-meta">
+            <div className="card-title">{dateStr} · {timeStr}</div>
+            <div className="card-subtitle">
+              <span className="badge">{userEntry?.platform ?? 'unknown'}</span>
+              <span className="badge badge--muted">user {formatDuration(userEntry?.durationMs ?? 0)}</span>
+              {userEntry && !userEntry.hasAudio && <span className="badge badge--warn">user may be silent</span>}
+              {session.ai && (
+                <span className="badge badge--muted">AI {formatDuration(aiEntry?.durationMs ?? 0)}</span>
+              )}
+              {session.ai && aiEntry && !aiEntry.hasAudio && (
+                <span className="badge badge--warn">AI may be silent</span>
+              )}
             </div>
-
-            {/* Utterance list */}
-            {isExpanded && (
-              <div className="utterance-list">
-                {entry.utterances.map((u) => {
-                  const isActive = activeUtterance?.entryIdx === entryIdx && activeUtterance?.utteranceIndex === u.index;
-                  const wallStart = formatWallTime(u.wallStartAt);
-                  const wallEnd = formatWallTime(u.wallEndAt);
-                  const hasWallTime = !!(wallStart || wallEnd);
-                  return (
-                    <div
-                      key={u.index}
-                      className={`utterance-row ${isActive ? 'utterance-row--active' : ''}`}
-                    >
-                      <div className="utterance-index">{u.index + 1}</div>
-                      <div className="utterance-body">
-                        <div className="utterance-time-group">
-                          {hasWallTime && (
-                            <div className="utterance-time utterance-time--wall">
-                              <span className="utterance-time-label">Wall</span>
-                              <span className="utterance-time-value">
-                                {wallStart ?? 'unknown'}{wallEnd ? ` → ${wallEnd}` : ''}
-                              </span>
-                            </div>
-                          )}
-                          <div className="utterance-time utterance-time--file">
-                            <span className="utterance-time-label">File</span>
-                            <span className="utterance-time-value">
-                              {formatTime(u.fileStartMs)} → {formatTime(u.fileStartMs + u.fileDurationMs)}
-                            </span>
-                            <span className="utterance-duration">{formatDuration(u.fileDurationMs)}</span>
-                          </div>
-                        </div>
-                        <div className="utterance-transcript">
-                          {u.transcript ?? <span className="utterance-no-transcript">no transcript</span>}
-                        </div>
-                      </div>
-                      <button
-                        className="seek-btn"
-                        onClick={() => handleSeekPlay(entryIdx, u)}
-                        title="Play this utterance"
-                      >
-                        {isActive && isPlaying ? '⏸' : '▶'}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            {userEntry && <div className="card-booking">Booking: {userEntry.bookingId}</div>}
           </div>
-        );
-      })}
+          <div className="card-actions">
+            <button className="action-btn" onClick={isPlaying && !activeRowKey ? handleStop : handlePlayAll}>
+              {isPlaying && !activeRowKey ? '⏹ Stop' : '▶ Play All'}
+            </button>
+          </div>
+        </div>
+
+        {session.ai && !aiHasUtterances && (
+          <div className="player-notice">AI metadata has no utterances — AI audio will still play on “Play All”.</div>
+        )}
+
+        <div className="utterance-list">
+          {session.rows.map((row) => {
+            const key = rowKey(row);
+            const isActive = activeRowKey === key;
+            const wall = formatWallTime(row.wallStartAt);
+            return (
+              <div key={key} className={`utterance-row ${isActive ? 'utterance-row--active' : ''} ${row.noAudio ? 'utterance-row--no-audio' : ''}`}>
+                <div className={`speaker-badge speaker-badge--${row.speaker}`}>
+                  {row.speaker === 'ai' ? 'AI' : 'You'}
+                </div>
+                <div className="utterance-body">
+                  <div className="utterance-time-group">
+                    <div className="utterance-time utterance-time--wall">
+                      <span className="utterance-time-label">T+</span>
+                      <span className="utterance-time-value">{formatOffset(row.offsetMs)}</span>
+                      {wall && <span className="utterance-duration">{wall}</span>}
+                      {row.approximate && <span className="badge badge--warn">approx</span>}
+                      {row.noAudio && <span className="badge badge--muted">text-only · no audio</span>}
+                    </div>
+                    <div className="utterance-time utterance-time--file">
+                      <span className="utterance-time-label">Dur</span>
+                      <span className="utterance-time-value">{formatDuration(row.fileDurationMs)}</span>
+                    </div>
+                  </div>
+                  <div className="utterance-transcript">
+                    {row.transcript ?? <span className="utterance-no-transcript">no transcript</span>}
+                  </div>
+                </div>
+                <button
+                  className="seek-btn"
+                  onClick={() => handlePlayRow(row)}
+                  disabled={row.noAudio}
+                  title={row.noAudio ? 'No audio for this utterance' : 'Play this utterance'}
+                >
+                  {isActive && isPlaying ? '⏸' : '▶'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

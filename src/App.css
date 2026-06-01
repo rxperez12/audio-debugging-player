@@ -410,3 +410,56 @@
 .seek-btn:hover {
   background: #00bfff33;
 }
+
+/* ─── Combined timeline additions ────────────────────────────────────────── */
+.speaker-badge {
+  width: 40px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.speaker-badge--user {
+  background: #00bfff22;
+  border: 1px solid #00bfff55;
+  color: #00bfff;
+}
+
+.speaker-badge--ai {
+  background: #a78bfa22;
+  border: 1px solid #a78bfa66;
+  color: #c4b5fd;
+}
+
+.player-notice {
+  padding: 12px 28px;
+  font-size: 13px;
+  color: #f59e0b;
+  background: #f59e0b11;
+  border-top: 1px solid #1e2433;
+}
+
+.utterance-row--no-audio {
+  opacity: 0.55;
+}
+
+.utterance-row--no-audio .utterance-transcript {
+  font-style: italic;
+}
+
+.seek-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.seek-btn:disabled:hover {
+  background: transparent;
+}
