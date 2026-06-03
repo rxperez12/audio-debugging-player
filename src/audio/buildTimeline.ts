@@ -10,17 +10,22 @@ export interface BuiltTimeline {
   t0Ms: number;
   /** AI track start offset (ms) from t0 */
   aiOffsetMs: number;
+  /** User track start offset (ms) from t0 — used for continuous user buffer scheduling */
+  userOffsetMs: number;
 }
 
 /**
- * Merge the user (VAD-compacted) and AI (continuous) utterance timelines into a
- * single wall-clock-ordered list.
+ * Merge the user and AI utterance timelines into a single wall-clock-ordered list.
  *
- * CRITICAL: user `fileStartMs` is a position in the gap-removed file, NOT a
- * wall-clock offset. The only cross-track axis is `wallStartAt` (both recorders
- * stamp from the same device clock). Each row's `offsetMs` is computed from
- * wallStartAt relative to t0; when wallStartAt is missing we fall back to the
- * track start + fileStartMs and flag the row as approximate.
+ * User fileStartMs semantics depend on captureMode:
+ *   - 'vad-compacted' (legacy / absent): position in a gap-removed file, NOT a
+ *     wall-clock offset. The only cross-track axis is wallStartAt.
+ *   - 'continuous' (new): true offset into the continuous file; wall-clock axis
+ *     via wallStartAt is still the authoritative cross-track reference.
+ *
+ * Each row's offsetMs is computed from wallStartAt relative to t0; when
+ * wallStartAt is missing we fall back to track start + fileStartMs and flag
+ * the row as approximate.
  */
 export function buildTimeline(
   userEntries: AudioRecordingEntry[],
@@ -37,6 +42,7 @@ export function buildTimeline(
   );
   const safeT0 = Number.isFinite(t0Ms) ? t0Ms : (userStartMs ?? 0);
   const aiOffsetMs = (aiStartMs ?? safeT0) - safeT0;
+  const userOffsetMs = (userStartMs ?? safeT0) - safeT0;
 
   const rows: TimelineRow[] = [];
 
@@ -58,7 +64,7 @@ export function buildTimeline(
 
   rows.sort((a, b) => a.offsetMs - b.offsetMs);
 
-  return { rows, t0Ms: safeT0, aiOffsetMs };
+  return { rows, t0Ms: safeT0, aiOffsetMs, userOffsetMs };
 }
 
 function parseStart(iso?: string | null): number | null {

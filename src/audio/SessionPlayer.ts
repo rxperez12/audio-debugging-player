@@ -6,11 +6,12 @@ import { getAudioContext } from './decodeFiles';
  *
  * Accuracy model:
  * - The AI buffer is CONTINUOUS → scheduled once at its wall-clock offset.
- * - The user buffer is VAD-COMPACTED → each utterance is scheduled separately,
- *   sliced out of the buffer at [fileStartMs, +fileDurationMs] and placed at its
- *   own wallStartAt offset. This re-inserts removed silence and restores real
- *   timing, so barge-in/overlap is represented correctly. Because every user
- *   utterance is independently anchored, clock drift cannot accumulate.
+ * - User buffer — two modes depending on captureMode in the recording metadata:
+ *   • 'vad-compacted' (legacy / absent): silence removed; each utterance is sliced
+ *     at [fileStartMs, +fileDurationMs] and re-anchored to its wallStartAt offset.
+ *     This re-inserts removed silence so barge-in/overlap is represented correctly.
+ *   • 'continuous' (new): gapless file; scheduled once at its track offset (like AI)
+ *     so the recovered speech prefix before each VAD marker is audible.
  *
  * AudioBufferSourceNode is single-use, so a fresh node is created for every play.
  */
@@ -46,13 +47,26 @@ export class SessionPlayer {
       lastEndTime = Math.max(lastEndTime, aiWhen + this.session.ai.buffer.duration);
     }
 
-    // User track: each utterance re-anchored to its own wall-clock moment.
-    for (const row of this.session.rows) {
-      if (row.speaker !== 'user') continue;
-      const when = base + row.offsetMs / 1000;
+    const userCaptureMode = this.session.user.entries[0]?.captureMode;
+
+    if (userCaptureMode === 'continuous') {
+      // Continuous user track: play the whole buffer once at its track start offset
+      // (same model as AI), so the recovered speech prefix before each VAD marker
+      // is audible. userOffsetMs is 0 when user and session start together.
+      const userOffsetMs = this.session.userOffsetMs ?? 0;
+      const userWhen = base + Math.max(0, userOffsetMs) / 1000;
       const src = this.makeSource(this.session.user.buffer);
-      src.start(when, row.fileStartMs / 1000, row.fileDurationMs / 1000);
-      lastEndTime = Math.max(lastEndTime, when + row.fileDurationMs / 1000);
+      src.start(userWhen);
+      lastEndTime = Math.max(lastEndTime, userWhen + this.session.user.buffer.duration);
+    } else {
+      // Legacy VAD-compacted: re-anchor each utterance to its own wall-clock moment.
+      for (const row of this.session.rows) {
+        if (row.speaker !== 'user') continue;
+        const when = base + row.offsetMs / 1000;
+        const src = this.makeSource(this.session.user.buffer);
+        src.start(when, row.fileStartMs / 1000, row.fileDurationMs / 1000);
+        lastEndTime = Math.max(lastEndTime, when + row.fileDurationMs / 1000);
+      }
     }
 
     this.armEndCallback(lastEndTime);
@@ -70,6 +84,22 @@ export class SessionPlayer {
 
     const src = this.makeSource(buffer);
     const when = this.ctx.currentTime;
+
+    if (row.speaker === 'user') {
+      const userCaptureMode = this.session.user.entries[0]?.captureMode;
+      if (userCaptureMode === 'continuous') {
+        // Pad a lead-in so the recovered speech prefix is audible when auditioning
+        // a single utterance. Clamp so we never seek before the start of the file.
+        const LEADIN_MS = 1000;
+        const leadIn = Math.min(LEADIN_MS, row.fileStartMs);
+        const startSec = (row.fileStartMs - leadIn) / 1000;
+        const durSec = (row.fileDurationMs + leadIn) / 1000;
+        src.start(when, startSec, durSec);
+        this.armEndCallback(when + durSec);
+        return;
+      }
+    }
+
     src.start(when, row.fileStartMs / 1000, row.fileDurationMs / 1000);
     this.armEndCallback(when + row.fileDurationMs / 1000);
   }

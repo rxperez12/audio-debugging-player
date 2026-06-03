@@ -75,7 +75,7 @@ export default function UploadPanel({ onLoad }: Props) {
         ai = { buffer: aiBuffer, entries: aiEntries };
       }
 
-      const { rows, t0Ms, aiOffsetMs } = buildTimeline(userEntries, aiEntries);
+      const { rows, t0Ms, aiOffsetMs, userOffsetMs } = buildTimeline(userEntries, aiEntries);
 
       onLoad({
         user: { buffer: userBuffer, entries: userEntries },
@@ -83,6 +83,7 @@ export default function UploadPanel({ onLoad }: Props) {
         rows,
         t0Ms,
         aiOffsetMs,
+        userOffsetMs,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load recording.');

@@ -25,6 +25,13 @@ export interface AudioRecordingEntry {
   platform: string;
   /** false on Android — concurrent mic access may yield silent recording */
   hasAudio: boolean;
+  /**
+   * 'continuous' — file is a gapless recording of the full session; fileStartMs
+   *   is a true offset into the continuous file.
+   * 'vad-compacted' — silence is removed; fileStartMs is a compacted-file offset.
+   * Absent field: treated as legacy 'vad-compacted'.
+   */
+  captureMode?: 'continuous' | 'vad-compacted';
   /** Per-utterance timeline for correlating audio with VAD events */
   utterances: UtteranceSegment[];
 }
@@ -66,7 +73,14 @@ export type Speaker = 'user' | 'ai';
 /**
  * A single row on the merged wall-clock timeline. `offsetMs` is relative to the
  * shared session start (t0); `fileStartMs`/`fileDurationMs` are positions inside
- * this row's OWN audio buffer (user buffer is VAD-compacted, AI buffer continuous).
+ * this row's OWN audio buffer.
+ *
+ * For user rows:
+ *   - captureMode 'vad-compacted' (legacy): fileStartMs is a position in a
+ *     gap-removed file — silence between utterances has been stripped.
+ *   - captureMode 'continuous' (new): fileStartMs is a true offset into the
+ *     continuous file; the recovered speech prefix lives just before this offset.
+ * For AI rows: buffer is always continuous.
  */
 export interface TimelineRow {
   speaker: Speaker;
@@ -108,4 +122,6 @@ export interface CombinedSession {
   t0Ms: number;
   /** AI track start offset (ms) from t0 — when to schedule the continuous AI buffer */
   aiOffsetMs: number;
+  /** User track start offset (ms) from t0 — used for continuous user buffer scheduling */
+  userOffsetMs: number;
 }
